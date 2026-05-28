@@ -1,0 +1,15 @@
+node_modules/
+dist/
+dist-electron/
+build/
+.claude/
+.vite/
+out/
+*.log
+.env
+.env.local
+.DS_Store
+Thumbs.db
+server/data/*.db
+server/data/*.db-journal
+client/release/
