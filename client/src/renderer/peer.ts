@@ -6,6 +6,19 @@ import { validateMeme, sanitizeAvatar } from './validate';
 
 const APP_ID = 'killi-livechat-v1';
 
+// Relais Nostr épinglés pour la signalisation WebRTC. Par défaut Trystero pioche
+// 5 relais dans une grosse liste publique souvent instable → découverte des pairs
+// aléatoire (« on ne se voit pas »). En figeant une liste de relais fiables et
+// largement utilisés, tous les pairs partagent les mêmes relais actifs.
+const RELAY_URLS = [
+  'wss://relay.damus.io',
+  'wss://nos.lol',
+  'wss://relay.primal.net',
+  'wss://relay.snort.social',
+  'wss://offchain.pub',
+  'wss://relay.mostr.pub',
+];
+
 /**
  * Wrapper pour bypass la contrainte stricte DataPayload de Trystero
  * (JsonValue/Blob/ArrayBuffer). Au runtime, Trystero JSON-stringify nos
@@ -26,6 +39,49 @@ let introAction: Action<PeerIntroduce> | null = null;
 
 /** Cache local des pseudos par peerId Trystero (liste des connectés). */
 const peerProfiles = new Map<string, User>();
+/** Dernière fois (ms) qu'on a reçu une intro d'un pair, pour purger les fantômes. */
+const peerLastSeen = new Map<string, number>();
+
+// Heartbeat de présence : on re-broadcast notre intro régulièrement. Ça répare
+// la visibilité à sens unique (intro perdue au moment du join) et permet de
+// purger les pairs dont on n'a plus de nouvelles (crash sans onPeerLeave).
+let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+const HEARTBEAT_MS = 15000;
+const PEER_STALE_MS = HEARTBEAT_MS * 3;
+
+function clearHeartbeat(): void {
+  if (heartbeatTimer) {
+    clearInterval(heartbeatTimer);
+    heartbeatTimer = null;
+  }
+}
+
+// Relance auto de la connexion : la découverte de pairs via les relais Nostr
+// échoue parfois au lancement (relais froid). Si aucun pair n'apparaît dans le
+// délai imparti, on refait un join complet pour rafraîchir la signalisation.
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+let reconnectAttempts = 0;
+const RECONNECT_DELAY_MS = 6000;
+const MAX_RECONNECT_ATTEMPTS = 6;
+
+function clearReconnectTimer(): void {
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+}
+
+function scheduleReconnectIfAlone(): void {
+  clearReconnectTimer();
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    // Toujours seul après le délai → on rafraîchit la connexion.
+    if (room && peerProfiles.size === 0 && reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+      reconnectAttempts++;
+      void connectToRoom().catch((err) => console.error('[peer] reconnect failed', err));
+    }
+  }, RECONNECT_DELAY_MS);
+}
 
 function rebuildPresence(myUser: User): void {
   const list: User[] = [myUser, ...peerProfiles.values()];
@@ -70,7 +126,13 @@ async function handleIncomingMeme(raw: unknown): Promise<void> {
   await window.api?.showMeme({ ...meme, ...overlayPos, volume, displayId });
 }
 
+/** Entrée publique : (re)connexion demandée par l'app. Remet à zéro le compteur de relance. */
 export async function joinPeerRoom(): Promise<void> {
+  reconnectAttempts = 0;
+  await connectToRoom();
+}
+
+async function connectToRoom(): Promise<void> {
   await leavePeerRoom();
   const { roomCode, password, pseudo, avatar, userId } = useSettings.getState();
   if (!roomCode.trim() || !pseudo.trim()) {
@@ -84,7 +146,7 @@ export async function joinPeerRoom(): Promise<void> {
   rebuildPresence(me);
 
   // Le password chiffre la couche de signalisation Nostr.
-  const r = joinRoom({ appId: APP_ID, password }, roomCode.trim());
+  const r = joinRoom({ appId: APP_ID, password, relayConfig: { urls: RELAY_URLS } }, roomCode.trim());
   room = r;
 
   memeAction = action<MemeMessage>(r, 'meme');
@@ -97,15 +159,20 @@ export async function joinPeerRoom(): Promise<void> {
     if (typeof payload.pseudo !== 'string' || payload.pseudo.length < 1 || payload.pseudo.length > 32) return;
     const cleanAvatar = sanitizeAvatar(payload.avatar);
     peerProfiles.set(ctx.peerId, { id: payload.userId, pseudo: payload.pseudo, avatar: cleanAvatar });
+    peerLastSeen.set(ctx.peerId, Date.now());
     rebuildPresence(me);
   };
 
   r.onPeerJoin = (peerId) => {
+    // Un pair est arrivé : la connexion est établie, on arrête de relancer.
+    reconnectAttempts = 0;
+    clearReconnectTimer();
     void introAction?.send({ userId: me.id, pseudo: me.pseudo, avatar: me.avatar }, { target: peerId });
   };
 
   r.onPeerLeave = (peerId) => {
     peerProfiles.delete(peerId);
+    peerLastSeen.delete(peerId);
     rebuildPresence(me);
   };
 
@@ -113,9 +180,30 @@ export async function joinPeerRoom(): Promise<void> {
   void introAction.send({ userId: me.id, pseudo: me.pseudo, avatar: me.avatar });
 
   usePresence.getState().setConnected(true);
+
+  // Si personne ne répond, on rafraîchira la connexion automatiquement.
+  scheduleReconnectIfAlone();
+
+  // Heartbeat : re-broadcast périodique de notre présence + purge des fantômes.
+  clearHeartbeat();
+  heartbeatTimer = setInterval(() => {
+    void introAction?.send({ userId: me.id, pseudo: me.pseudo, avatar: me.avatar });
+    const cutoff = Date.now() - PEER_STALE_MS;
+    let removed = false;
+    for (const [peerId, seen] of peerLastSeen) {
+      if (seen < cutoff) {
+        peerProfiles.delete(peerId);
+        peerLastSeen.delete(peerId);
+        removed = true;
+      }
+    }
+    if (removed) rebuildPresence(me);
+  }, HEARTBEAT_MS);
 }
 
 export async function leavePeerRoom(): Promise<void> {
+  clearReconnectTimer();
+  clearHeartbeat();
   if (room) {
     try {
       await room.leave();
@@ -126,6 +214,7 @@ export async function leavePeerRoom(): Promise<void> {
   }
   memeAction = introAction = null;
   peerProfiles.clear();
+  peerLastSeen.clear();
   usePresence.getState().setConnected(false);
   usePresence.getState().setUsers([]);
   usePresence.getState().setActiveMeme(null);
