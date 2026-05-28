@@ -34,6 +34,23 @@ function sendUpdaterStatus(status: UpdaterStatus): void {
 }
 
 function setupAutoUpdater(): void {
+  // Logs fichier : permet de diagnostiquer un échec de mise à jour chez un ami
+  // (« rien ne se passe »). Chemin loggé au démarrage pour qu'on sache où regarder.
+  const logPath = path.join(app.getPath('logs'), 'updater.log');
+  const ulog = (level: string, ...args: unknown[]): void => {
+    const msg = args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ');
+    const line = `[${new Date().toISOString()}] ${level} ${msg}\n`;
+    void fs.appendFile(logPath, line).catch(() => {});
+    console.log('[updater]', level, msg);
+  };
+  autoUpdater.logger = {
+    info: (...a: unknown[]) => ulog('INFO', ...a),
+    warn: (...a: unknown[]) => ulog('WARN', ...a),
+    error: (...a: unknown[]) => ulog('ERROR', ...a),
+    debug: (...a: unknown[]) => ulog('DEBUG', ...a),
+  };
+  ulog('INFO', `updater démarré, version ${app.getVersion()}, log: ${logPath}`);
+
   autoUpdater.on('checking-for-update', () => sendUpdaterStatus({ state: 'checking' }));
   autoUpdater.on('update-available', (info) => {
     pendingUpdateVersion = info.version;

@@ -2,6 +2,26 @@ import { useEffect, useRef, useState } from 'react';
 import { useSettings } from '../store';
 import { broadcastProfile, joinPeerRoom, leavePeerRoom } from '../peer';
 import { PositionPicker } from './PositionPicker';
+import { useUpdaterStatus } from '../useUpdaterStatus';
+
+function updaterLabel(status: ReturnType<typeof useUpdaterStatus>): string {
+  switch (status.state) {
+    case 'checking':
+      return 'Vérification en cours…';
+    case 'available':
+      return `Nouvelle version ${status.version} trouvée — téléchargement…`;
+    case 'downloading':
+      return `Téléchargement ${status.version ?? ''} : ${status.percent}%`;
+    case 'downloaded':
+      return `Version ${status.version} prête à installer.`;
+    case 'not-available':
+      return 'Tu es déjà à jour.';
+    case 'error':
+      return `Erreur de mise à jour : ${status.message}`;
+    default:
+      return '';
+  }
+}
 
 interface DisplayInfo {
   id: number;
@@ -35,6 +55,17 @@ export function SettingsPanel({ onClose }: Props) {
   const [endureMsg, setEndureMsg] = useState(false);
   const [displays, setDisplays] = useState<DisplayInfo[]>([]);
   const fileRef = useRef<HTMLInputElement | null>(null);
+  const updater = useUpdaterStatus();
+  const [checking, setChecking] = useState(false);
+
+  async function checkUpdates() {
+    setChecking(true);
+    try {
+      await window.api?.checkForUpdates();
+    } finally {
+      setTimeout(() => setChecking(false), 1500);
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -201,6 +232,20 @@ export function SettingsPanel({ onClose }: Props) {
           <div className="panel-actions">
             <button onClick={reconnect}>Rejoindre à nouveau</button>
             <button className="danger" onClick={logout}>Quitter la room</button>
+          </div>
+        </section>
+
+        <section>
+          <h3>Mises à jour</h3>
+          <p className="muted small">Version installée : v{__APP_VERSION__}</p>
+          {updaterLabel(updater) && <p className="muted small">{updaterLabel(updater)}</p>}
+          <div className="panel-actions">
+            <button onClick={() => void checkUpdates()} disabled={checking || updater.state === 'checking'}>
+              {checking || updater.state === 'checking' ? 'Vérification…' : 'Vérifier les mises à jour'}
+            </button>
+            {updater.state === 'downloaded' && (
+              <button onClick={() => void window.api?.quitAndInstall()}>Redémarrer &amp; installer</button>
+            )}
           </div>
         </section>
       </div>

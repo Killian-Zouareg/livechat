@@ -1,23 +1,7 @@
-import { useEffect, useState } from 'react';
-import type { UpdaterStatus } from '@shared/types';
+import { useUpdaterStatus } from '../useUpdaterStatus';
 
 export function UpdateBanner() {
-  const [status, setStatus] = useState<UpdaterStatus>({ state: 'idle' });
-
-  useEffect(() => {
-    let mounted = true;
-    void window.api
-      ?.getUpdaterStatus()
-      .then((s) => {
-        if (mounted) setStatus(s);
-      })
-      .catch(() => {});
-    const unsub = window.api?.onUpdaterStatus(setStatus);
-    return () => {
-      mounted = false;
-      unsub?.();
-    };
-  }, []);
+  const status = useUpdaterStatus();
 
   if (status.state === 'available') {
     return <div className="update-banner">⬇️ Nouvelle version {status.version} disponible — préparation du téléchargement…</div>;
