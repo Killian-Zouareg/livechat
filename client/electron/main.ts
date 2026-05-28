@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createOverlayWindow, destroyAllOverlays, destroyOverlay, setOverlayClosedHandler } from './overlay.js';
 import type { OverlayShowPayload } from './preload.js';
+import type { UpdaterStatus } from '../../shared/types.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 process.env.APP_ROOT = path.join(__dirname, '..');
@@ -19,6 +20,41 @@ const RENDERER_DIST = path.join(process.env.APP_ROOT, 'dist');
 process.env.VITE_PUBLIC = VITE_DEV_SERVER_URL ? path.join(process.env.APP_ROOT, 'public') : RENDERER_DIST;
 
 let mainWindow: BrowserWindow | null = null;
+
+// Dernier état connu de l'updater, renvoyé au renderer au montage (les events
+// peuvent arriver avant que l'UI ne soit prête à écouter).
+let updaterStatus: UpdaterStatus = { state: 'idle' };
+let pendingUpdateVersion: string | undefined;
+
+function sendUpdaterStatus(status: UpdaterStatus): void {
+  updaterStatus = status;
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('updater:status', status);
+  }
+}
+
+function setupAutoUpdater(): void {
+  autoUpdater.on('checking-for-update', () => sendUpdaterStatus({ state: 'checking' }));
+  autoUpdater.on('update-available', (info) => {
+    pendingUpdateVersion = info.version;
+    sendUpdaterStatus({ state: 'available', version: info.version });
+  });
+  autoUpdater.on('update-not-available', () => sendUpdaterStatus({ state: 'not-available' }));
+  autoUpdater.on('download-progress', (p) =>
+    sendUpdaterStatus({ state: 'downloading', percent: Math.round(p.percent), version: pendingUpdateVersion }),
+  );
+  autoUpdater.on('update-downloaded', (info) =>
+    sendUpdaterStatus({ state: 'downloaded', version: info.version }),
+  );
+  autoUpdater.on('error', (err) =>
+    sendUpdaterStatus({ state: 'error', message: err?.message ?? String(err) }),
+  );
+
+  autoUpdater.checkForUpdatesAndNotify().catch((err) => {
+    console.error('[updater] check failed', err);
+    sendUpdaterStatus({ state: 'error', message: err?.message ?? String(err) });
+  });
+}
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -58,6 +94,18 @@ function createWindow(): void {
 }
 
 ipcMain.handle('app:isFocused', () => mainWindow?.isFocused() ?? false);
+
+ipcMain.handle('updater:getStatus', () => updaterStatus);
+ipcMain.handle('updater:check', () => {
+  if (VITE_DEV_SERVER_URL) return;
+  void autoUpdater.checkForUpdates().catch((err) => {
+    sendUpdaterStatus({ state: 'error', message: err?.message ?? String(err) });
+  });
+});
+ipcMain.handle('updater:quitAndInstall', () => {
+  destroyAllOverlays();
+  autoUpdater.quitAndInstall();
+});
 
 ipcMain.handle('app:notify', (_event, payload: { title: string; body: string }) => {
   if (!Notification.isSupported()) return;
@@ -205,9 +253,7 @@ app.whenReady().then(() => {
   createWindow();
   // Pas de check de mise à jour en dev (pas d'app packagée à comparer).
   if (!VITE_DEV_SERVER_URL) {
-    autoUpdater.checkForUpdatesAndNotify().catch((err) => {
-      console.error('[updater] check failed', err);
-    });
+    setupAutoUpdater();
   }
 });
 

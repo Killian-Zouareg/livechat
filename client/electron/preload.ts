@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { MemeMessage } from '../../shared/types';
+import type { MemeMessage, UpdaterStatus } from '../../shared/types';
 
 export interface OverlayShowPayload extends MemeMessage {
   /** Volume capturé côté receiver au moment de l'arrivée du mème. */
@@ -61,6 +61,18 @@ const api = {
     ipcRenderer.invoke('library:readFile', absPath, root),
   /** Liste les écrans disponibles pour choisir où s'affichent les mèmes reçus. */
   displaysList: (): Promise<DisplayInfo[]> => ipcRenderer.invoke('displays:list'),
+  /** État courant de l'auto-updater (au montage de l'UI). */
+  getUpdaterStatus: (): Promise<UpdaterStatus> => ipcRenderer.invoke('updater:getStatus'),
+  /** S'abonne aux changements d'état de l'auto-updater. */
+  onUpdaterStatus: (handler: (status: UpdaterStatus) => void): (() => void) => {
+    const listener = (_e: unknown, status: UpdaterStatus): void => handler(status);
+    ipcRenderer.on('updater:status', listener);
+    return () => ipcRenderer.removeListener('updater:status', listener);
+  },
+  /** Relance une vérification de mise à jour. */
+  checkForUpdates: (): Promise<void> => ipcRenderer.invoke('updater:check'),
+  /** Quitte et installe la mise à jour téléchargée. */
+  quitAndInstall: (): Promise<void> => ipcRenderer.invoke('updater:quitAndInstall'),
 };
 
 /** API exposée sur window.overlayApi — pour les fenêtres overlay (receiver). */

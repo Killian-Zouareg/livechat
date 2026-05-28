@@ -87,6 +87,16 @@ export interface MemeMessage {
   ts: number;
 }
 
+/** État de l'auto-updater poussé du main process vers l'UI. */
+export type UpdaterStatus =
+  | { state: 'idle' }
+  | { state: 'checking' }
+  | { state: 'available'; version: string }
+  | { state: 'not-available' }
+  | { state: 'downloading'; percent: number; version?: string }
+  | { state: 'downloaded'; version: string }
+  | { state: 'error'; message: string };
+
 /** Payload Trystero pour se présenter aux autres pairs. */
 export interface PeerIntroduce {
   userId: string;

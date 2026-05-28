@@ -6,6 +6,7 @@ import { SettingsPanel } from './components/SettingsPanel';
 import { UserList } from './components/UserList';
 import { Header } from './components/Header';
 import { MemeComposer } from './components/MemeComposer';
+import { UpdateBanner } from './components/UpdateBanner';
 
 export function App() {
   const { pseudo, roomCode, password, theme } = useSettings();
@@ -40,11 +41,17 @@ export function App() {
   }, [pseudo, roomCode, password]);
 
   if (!pseudo || !roomCode || !password) {
-    return <LoginScreen />;
+    return (
+      <>
+        <UpdateBanner />
+        <LoginScreen />
+      </>
+    );
   }
 
   return (
     <div className="app">
+      <UpdateBanner />
       <Header
         connected={connected}
         onToggleSettings={() => setSettingsOpen((v) => !v)}
