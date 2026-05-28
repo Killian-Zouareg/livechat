@@ -17,6 +17,7 @@ export function Header({ connected, onToggleSettings, onToggleUsers, onToggleLib
       <div className="brand">
         <span className={`status-dot ${connected ? 'on' : 'off'}`} />
         <strong>Livechat</strong>
+        <span className="version">v{__APP_VERSION__}</span>
         <span className="me">— {pseudo}</span>
       </div>
       <div className="header-actions">
